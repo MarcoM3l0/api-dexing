@@ -1,4 +1,4 @@
-# Dexin NDS3508B Zabbix Middleware
+# Dexing NDS3508B Zabbix Middleware
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-Microservice-green?style=for-the-badge&logo=flask&logoColor=white)
