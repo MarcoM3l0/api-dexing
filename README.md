@@ -81,8 +81,8 @@ Para executar o middleware em ambiente de produção com estabilidade, recomenda
 
 1.  **Clone o repositório:**
     ```bash
-    git clone [https://github.com/Ronec1r550/API-DEXING.git](https://github.com/Ronec1r550/API-DEXING.git)
-    cd API-DEXING
+    git clone [https://github.com/Ronec1r/api-dexing.git](https://github.com/Ronec1r/api-dexing.git)
+    cd api-dexing
     ```
 
 2.  **Crie um ambiente virtual e instale as dependências:**
