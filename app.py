@@ -1,8 +1,22 @@
-from flask import Flask, request, jsonify
+"""
+Módulo de integração com equipamentos Dexin para monitoramento via Zabbix.
+Este script expõe uma API Flask que consulta métricas de sintonizadores (tuners).
+"""
+
+import logging
+
 import requests
+from flask import Flask, request, jsonify
 from requests.auth import HTTPBasicAuth
 
 app = Flask(__name__)
+# Configuração de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+logger = logging.getLogger(__name__)
 
 # Configurações padrão para conexão com equipamentos Dexin
 CONFIG = {
@@ -14,6 +28,13 @@ CONFIG = {
     "CHUNK_SIZE": 9                     # Quantidade de campos por tuner na resposta do CGI
 }
 
+@app.route("/health", methods=["GET"])
+def health_check():
+    """
+    Endpoint de saúde para verificar se a API está rodando.
+    Retorna status 200 com mensagem de sucesso.
+    """
+    return jsonify({"status": "ok", "message": "API is running"}), 200
 
 @app.route("/metrics", methods=["POST"])
 def get_metrics():
@@ -33,6 +54,7 @@ def get_metrics():
     req_data = request.get_json()
 
     if not req_data:
+        logger.warning("Requisição recebida sem payload JSON")
         return jsonify({"error": "Invalid JSON body"}), 400
 
     # Extrai parâmetros da requisição ou usa valores padrão
@@ -42,7 +64,10 @@ def get_metrics():
     password = req_data.get("password", CONFIG["PASSWORD_DEFAULT"])
 
     if not target_ip:
+        logger.warning("IP não fornecido na requisição")
         return jsonify({"error": "IP missing"}), 400
+
+    logger.info("Consultando métricas do equipamento %s:%s", target_ip, target_port)
 
     # Monta a URL para o CGI, do Dexin, que retorna dados dos tuners
     url = f"http://{target_ip}:{target_port}/cgi-bin/tuner.cgi"
@@ -50,7 +75,8 @@ def get_metrics():
 
     try:
         # 2. Faz a requisição ao equipamento
-        # Requisição HTTP ao equipamento Dexin usando autenticação básica e timeout para evitar travamentos
+        # Requisição HTTP ao equipamento Dexin usando autenticação básica
+        # e timeout para evitar travamentos
         response = requests.post(
             url,
             data=payload,
@@ -59,27 +85,32 @@ def get_metrics():
         )
 
         if response.status_code != 200:
+            logger.error("Equipamento %s retornou HTTP %s", target_ip, response.status_code)
             return jsonify({"error": f"HTTP {response.status_code}"}), 502
 
         # 3. Processamento dos Dados (Parsing)
         raw_data = response.text
 
         # O retorno é algo como "tuner:1,99,40,..."
-        if ":" in raw_data:
-            content = raw_data.split(":", 1)[1]
-        else:
-            # Se não vier no formato esperado, retorna lista vazia
+        if ":" not in raw_data:
+            logger.warning("Equipamento %s retornou dados em formato inválido", target_ip)
             return jsonify([]), 200
 
-        content = raw_data.split(":", 1)[1] 
+        content = raw_data.split(":", 1)[1]
         values = content.split(",")
 
-        return jsonify(parse_turner_data(values))
+        tuner_data = parse_turner_data(values)
+        logger.info("Sucesso: %s tuners encontrados em %s", len(tuner_data), target_ip)
+
+        return jsonify(tuner_data)
     except requests.exceptions.Timeout:
+        logger.error("Timeout ao conectar em %s:%s", target_ip, target_port)
         return jsonify({"error": "Request timed out"}), 504
     except requests.exceptions.RequestException as e:
+        logger.error("Erro de conexão com %s: %s", target_ip, str(e))
         return jsonify({"error": f"Connection error: {str(e)}"}), 502
-    except Exception as e:
+    except Exception as e: # pylint: disable=broad-exception-caught
+        logger.exception("Erro inesperado ao processar %s", target_ip)
         return jsonify({"error": str(e)}), 500
 
 
@@ -111,7 +142,8 @@ def parse_turner_data(values):
             # Ignora tuners com ID 0 (linhas vazias do equipamento)
             turne_id = int(chunk[0])
 
-            if turne_id == 0: continue
+            if turne_id == 0:
+                continue
 
             # Monta objeto no formato esperado pelo Zabbix
             item = {
@@ -119,19 +151,20 @@ def parse_turner_data(values):
                 "tuner_id": str(turne_id),
                 "quality": int(chunk[3]) if chunk[3].isdigit() else 0,
                 "strength": int(chunk[4]) if chunk[4].isdigit() else 0,
-                "cn": float(chunk[6].replace(" db", "").strip()),
-                "power": float(chunk[7].replace(" dbm", "").strip()),
+                "cn": float(chunk[6].lower().replace(" db", "").strip()),
+                "power": float(chunk[7].lower().replace(" dbm", "").strip()),
                 "ber": float(chunk[8].strip()),
             }
 
             zabbix_data.append(item)
 
-        except (ValueError, IndexError):
+        except (ValueError, IndexError) as e:
             # Pula tuners com dados inválidos ou incompletos
+            logger.debug("Chunk inválido ignorado: %s... - %s", chunk[:3], e)
             continue
 
     return zabbix_data
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000, debug=False)
